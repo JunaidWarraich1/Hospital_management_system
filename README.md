@@ -12,9 +12,9 @@ This project implements the core business logic for a clinic appointment and bil
 
 ### 2.1 Pure Functional Core (Zero OOP in Domain Logic)
 Per assignment restrictions, the clinic system in `main.py` uses zero classes or external packages and communicates strictly via native Python data structures (while `test_hospital_system.py` uses Python's built-in `unittest.TestCase` harness):
-- **Canonical Input Normalization:** `normalize_id`, `normalize_status`, and `normalize_appointment` normalize IDs (`.strip().upper()`) and statuses (`.strip().lower()`) consistently across validation, processing, cancellation, and reporting.
+- **Canonical Input Normalization & Pure Validation:** `normalize_id`, `normalize_status`, and `normalize_appointment` normalize IDs (`.strip().upper()`) and statuses (`.strip().lower()`). `validate_appointment` is strictly pure and side-effect-free (inspecting data without mutating input dictionaries), while stored records are canonicalized during `process_appointment` and `cancel_appointment`.
 - **No Global State Mutation & Dual Idempotency:** Functions accept state collections explicitly (`processed_ids` parameter), and `process_appointment` also refuses re-processing whenever an appointment already contains a `"bill"`, guaranteeing protection even if a caller omits `processed_ids`.
-- **Duplicate Batch ID Guard:** `find_duplicate_appointment_ids` and `process_appointment` detect and reject duplicate `appointment_id` entries across the appointment list rather than silently processing one and hiding the rest.
+- **Duplicate Batch ID & Catalog Collision Guard:** `find_duplicate_appointment_ids` rejects duplicate appointment IDs, while `calculate_test_charges` rejects catalogs where multiple keys normalize to the same test name (e.g., `"ECG"` and `"ecg "`).
 - **Historical Billing Snapshot & Billed Completion Counting:** Processed visits store immutable bill dictionaries, and reports/dashboards count a visit as `completed` only when it carries a valid saved `"bill"` (rejected visits with seeded `"completed"` status are tracked under `unbilled`).
 
 ### 2.2 LEGB Scope Design
@@ -43,7 +43,8 @@ Python's LEGB (Local, Enclosing, Global, Built-in) resolution order is respected
    - `Senior Discount = (Subtotal - Insurance Covered) * 0.10`
 4. **Ledger Balance Sheet Invariant:**
    - `Patient Revenue = Consultation Revenue + Test Revenue - Insurance Coverage - Senior Discount + Tax`
-5. **State-Machine Transition & Cancellation:**
+5. **State-Machine Transition, Lifecycle & Cancellation:**
+   - Appointments begin in `pending` or `completed` status. Calling `process_appointment` signifies the clinical visit occurred and finalized: validity is confirmed, bill breakdown snapshot is computed, and the appointment transitions to billed `completed`.
    - Completed appointments cannot be cancelled.
    - Cancelled appointments (including mixed-case/padded values like `"Cancelled"`) cannot be billed or re-cancelled.
    - Processing an already-billed appointment twice is strictly blocked regardless of whether `processed_ids` is passed.
@@ -56,12 +57,14 @@ Python's LEGB (Local, Enclosing, Global, Built-in) resolution order is respected
 |---|---|
 | Non-numeric, boolean, `NaN`, or `inf` fee (`"5000"`, `True`) | `validate_appointment` returns `(False, reason)`; `calculate_total` and `calculate_bill` raise `TypeError` / `ValueError` |
 | Negative fee or charges (`-5000`) | `validate_appointment` returns `(False, reason)`; `calculate_total` and `calculate_bill` raise `ValueError` |
-| Invalid or unrealistic age (`True`, `"30"`, `0`, `500`) | Checked via `not isinstance(age, bool) and isinstance(age, int) and 0 < age <= 130`; `validate_appointment` returns `(False, reason)` |
+| Invalid or unrealistic age (`True`, `"30"`, `0`, `500`, `131`) | Checked via `not isinstance(age, bool) and isinstance(age, int) and 0 < age <= 130`; `validate_appointment` returns `(False, reason)` |
+| Senior citizen age threshold boundary (Age 60 vs 59) | Exact 60 boundary verified: age 60 qualifies for 10% senior discount, age 59 does not |
 | String boolean flags (`insurance="no"`, `available="yes"`) | `validate_appointment` returns `(False, reason)`; `calculate_bill` raises `TypeError` |
 | Unhashable ID payloads (`["P001"]`, `{"id": "D001"}`) | Guarded in `resolve_record` / `normalize_id`; safely returns `(False, reason)` without raising `TypeError` |
 | Non-list test payload (`tests="ECG"`) | `calculate_test_charges` returns `(0.0, errors)`; `validate_appointment` returns `(False, reason)` |
 | Duplicate or unknown test requests | Case-insensitively detected and rejected cleanly |
-| Messy casing / whitespace (`"Cancelled"`, `"Pending"`, `" p001 "`) | Normalized cleanly across validation, cancellation, billing, and all reports |
+| Colliding test catalog names (`"ECG": 1500`, `"ecg ": 999`) | Detected via normalized catalog key inspection in `calculate_test_charges` and rejected |
+| Messy casing / whitespace (`"Cancelled"`, `"Pending"`, `" p001 "`) | Normalized cleanly across cancellation, billing, and all reports; `validate_appointment` remains side-effect-free |
 | Duplicate `appointment_id` in batch | Detected by `find_duplicate_appointment_ids` and rejected by `process_appointment` / `cancel_appointment` |
 | Typo in `**kwargs` (`insurence=True`) | Checked against allowed keys set in `calculate_bill`; raises `ValueError` |
 | Doctor fee raised after billing or second call without `processed_ids` | Blocked by saved `"bill"` guard; dashboard revenue uses historical bill snapshots |
@@ -134,9 +137,9 @@ Highest Spending Patient: Usman Ali
 
 ### Automated Unit Test Suite (`python -m unittest`)
 ```text
-.....................
+........................
 ----------------------------------------------------------------------
-Ran 21 tests in 0.016s
+Ran 24 tests in 0.010s
 
 OK
 ```
