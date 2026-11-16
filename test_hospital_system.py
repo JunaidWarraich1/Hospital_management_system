@@ -1,6 +1,6 @@
 import copy
-import math
 import unittest
+
 from main import (
     CLINIC_CONFIG,
     calculate_bill,
@@ -12,6 +12,7 @@ from main import (
     generate_clinic_dashboard,
     generate_doctor_report,
     generate_patient_report,
+    normalize_appointment,
     process_appointment,
     validate_appointment,
 )
@@ -81,14 +82,12 @@ class TestHospitalSystem(unittest.TestCase):
 
     def test_calculate_total_type_fuzzing(self):
         for bad in ("100", None, True, False, [100], {"fee": 100}):
-            with self.subTest(bad=bad):
-                with self.assertRaises(TypeError):
-                    calculate_total(bad)
+            with self.subTest(bad=bad), self.assertRaises(TypeError):
+                calculate_total(bad)
 
         for bad_num in (-10, -0.01, float("nan"), float("inf")):
-            with self.subTest(bad_num=bad_num):
-                with self.assertRaises(ValueError):
-                    calculate_total(bad_num)
+            with self.subTest(bad_num=bad_num), self.assertRaises(ValueError):
+                calculate_total(bad_num)
 
     def test_calculate_bill_standard_and_senior(self):
         bill_standard = calculate_bill(5000, 2500, insurance=True, senior_discount=False)
@@ -116,13 +115,13 @@ class TestHospitalSystem(unittest.TestCase):
             calculate_bill(5000, 1000, senior_discount="true")
 
     def test_calculate_test_charges_case_and_whitespace_normalization(self):
-        patients, doctors, appointments, prices = get_test_fixtures()
+        _, _, _, prices = get_test_fixtures()
         cost, errors = calculate_test_charges([" ecg ", "BLOOD TEST"], prices)
         self.assertEqual(cost, 2500.0)
         self.assertEqual(errors, [])
 
     def test_calculate_test_charges_rejects_duplicates(self):
-        patients, doctors, appointments, prices = get_test_fixtures()
+        _, _, _, prices = get_test_fixtures()
         cost, errors = calculate_test_charges(["ECG", "ecg"], prices)
         self.assertEqual(cost, 0.0)
         self.assertTrue(any("Duplicate test" in e for e in errors))
@@ -136,47 +135,47 @@ class TestHospitalSystem(unittest.TestCase):
         patients, doctors, appointments, prices = get_test_fixtures()
         valid_appt = copy.deepcopy(appointments[0])
 
-        valid, msg = validate_appointment(valid_appt, patients, doctors, prices)
+        valid, _ = validate_appointment(valid_appt, patients, doctors, prices)
         self.assertTrue(valid)
 
         bad_patient = copy.deepcopy(patients)
         bad_patient["P001"]["age"] = True
-        valid, msg = validate_appointment(valid_appt, bad_patient, doctors, prices)
+        valid, _ = validate_appointment(valid_appt, bad_patient, doctors, prices)
         self.assertFalse(valid)
 
         bad_patient["P001"]["age"] = -5
-        valid, msg = validate_appointment(valid_appt, bad_patient, doctors, prices)
+        valid, _ = validate_appointment(valid_appt, bad_patient, doctors, prices)
         self.assertFalse(valid)
 
         bad_patient["P001"]["age"] = 500
-        valid, msg = validate_appointment(valid_appt, bad_patient, doctors, prices)
+        valid, _ = validate_appointment(valid_appt, bad_patient, doctors, prices)
         self.assertFalse(valid)
 
         bad_patient["P001"]["age"] = 131
-        valid, msg = validate_appointment(valid_appt, bad_patient, doctors, prices)
+        valid, _ = validate_appointment(valid_appt, bad_patient, doctors, prices)
         self.assertFalse(valid)
 
         boundary_patient = copy.deepcopy(patients)
         boundary_patient["P001"]["age"] = 130
-        valid, msg = validate_appointment(copy.deepcopy(valid_appt), boundary_patient, doctors, prices)
+        valid, _ = validate_appointment(copy.deepcopy(valid_appt), boundary_patient, doctors, prices)
         self.assertTrue(valid)
 
         bad_patient["P001"]["age"] = 32
         bad_patient["P001"]["insurance"] = "yes"
-        valid, msg = validate_appointment(valid_appt, bad_patient, doctors, prices)
+        valid, _ = validate_appointment(valid_appt, bad_patient, doctors, prices)
         self.assertFalse(valid)
 
         bad_doctor = copy.deepcopy(doctors)
         bad_doctor["D001"]["fee"] = True
-        valid, msg = validate_appointment(valid_appt, patients, bad_doctor, prices)
+        valid, _ = validate_appointment(valid_appt, patients, bad_doctor, prices)
         self.assertFalse(valid)
 
         bad_doctor["D001"]["fee"] = -1000
-        valid, msg = validate_appointment(valid_appt, patients, bad_doctor, prices)
+        valid, _ = validate_appointment(valid_appt, patients, bad_doctor, prices)
         self.assertFalse(valid)
 
         bad_doctor["D001"]["fee"] = float("nan")
-        valid, msg = validate_appointment(valid_appt, patients, bad_doctor, prices)
+        valid, _ = validate_appointment(valid_appt, patients, bad_doctor, prices)
         self.assertFalse(valid)
 
         whitespace_appt = copy.deepcopy(valid_appt)
@@ -184,35 +183,42 @@ class TestHospitalSystem(unittest.TestCase):
         whitespace_appt["patient_id"] = " p001 "
         whitespace_appt["doctor_id"] = " d001 "
         whitespace_appt["status"] = " COMPLETED "
-        valid, msg = validate_appointment(whitespace_appt, patients, doctors, prices)
+        original_unmodified = copy.deepcopy(whitespace_appt)
+        valid, _ = validate_appointment(whitespace_appt, patients, doctors, prices)
         self.assertTrue(valid)
-        self.assertEqual(whitespace_appt["appointment_id"], "A001")
-        self.assertEqual(whitespace_appt["patient_id"], "P001")
-        self.assertEqual(whitespace_appt["doctor_id"], "D001")
-        self.assertEqual(whitespace_appt["status"], "completed")
+        self.assertEqual(whitespace_appt, original_unmodified)
+
+        normalized_copy = copy.deepcopy(whitespace_appt)
+        normalize_appointment(normalized_copy)
+        self.assertEqual(normalized_copy["appointment_id"], "A001")
+        self.assertEqual(normalized_copy["patient_id"], "P001")
+        self.assertEqual(normalized_copy["doctor_id"], "D001")
+        self.assertEqual(normalized_copy["status"], "completed")
 
         bad_doctor["D001"]["available"] = "yes"
-        valid, msg = validate_appointment(valid_appt, patients, bad_doctor, prices)
+        valid, _ = validate_appointment(valid_appt, patients, bad_doctor, prices)
         self.assertFalse(valid)
 
         bad_appt = copy.deepcopy(valid_appt)
         bad_appt["status"] = "unknown_status"
-        valid, msg = validate_appointment(bad_appt, patients, doctors, prices)
+        valid, _ = validate_appointment(bad_appt, patients, doctors, prices)
         self.assertFalse(valid)
 
         blank_id_appt = copy.deepcopy(valid_appt)
         blank_id_appt["appointment_id"] = "   "
-        valid, msg = validate_appointment(blank_id_appt, patients, doctors, prices)
+        valid, _ = validate_appointment(blank_id_appt, patients, doctors, prices)
         self.assertFalse(valid)
 
         unhashable_id_appt = copy.deepcopy(valid_appt)
         unhashable_id_appt["patient_id"] = ["P001"]
         unhashable_id_appt["doctor_id"] = {"id": "D001"}
-        valid, msg = validate_appointment(unhashable_id_appt, patients, doctors, prices)
+        valid, _ = validate_appointment(unhashable_id_appt, patients, doctors, prices)
         self.assertFalse(valid)
+        
+        
 
     def test_cancellation_rules_and_terminal_immutability(self):
-        patients, doctors, appointments, prices = get_test_fixtures()
+        _, _, appointments, _ = get_test_fixtures()
         test_apps = copy.deepcopy(appointments)
 
         pending_appt = {
@@ -224,21 +230,21 @@ class TestHospitalSystem(unittest.TestCase):
         }
         test_apps.append(pending_appt)
 
-        ok, msg = cancel_appointment(" a009 ", test_apps)
+        ok, _ = cancel_appointment(" a009 ", test_apps)
         self.assertTrue(ok)
         self.assertEqual(pending_appt["status"], "cancelled")
 
-        ok, msg = cancel_appointment("A009", test_apps)
+        ok, _ = cancel_appointment("A009", test_apps)
         self.assertFalse(ok)
 
-        ok, msg = cancel_appointment("A001", test_apps)
+        ok, _ = cancel_appointment("A001", test_apps)
         self.assertFalse(ok)
 
-        ok, msg = cancel_appointment("NON_EXISTENT", test_apps)
+        ok, _ = cancel_appointment("NON_EXISTENT", test_apps)
         self.assertFalse(ok)
 
     def test_mixed_case_cancelled_appointment_not_billed(self):
-        patients, doctors, appointments, prices = get_test_fixtures()
+        patients, doctors, _, prices = get_test_fixtures()
         for raw_status in ("Cancelled", " cancelled ", "CANCELLED"):
             with self.subTest(raw_status=raw_status):
                 test_apps = [
@@ -267,7 +273,7 @@ class TestHospitalSystem(unittest.TestCase):
                 "tests": ["ECG", "Blood Test"],
             }
         ]
-        ok, res = process_appointment("A001", test_apps, patients, doctors, prices)
+        ok, _ = process_appointment("A001", test_apps, patients, doctors, prices)
         self.assertTrue(ok)
         self.assertEqual(test_apps[0]["patient_id"], "P001")
         self.assertEqual(test_apps[0]["doctor_id"], "D001")
@@ -288,22 +294,22 @@ class TestHospitalSystem(unittest.TestCase):
         test_apps = copy.deepcopy(appointments)
         processed = set()
 
-        ok, res = process_appointment("A001", test_apps, patients, doctors, prices, processed)
+        ok, _ = process_appointment("A001", test_apps, patients, doctors, prices, processed)
         self.assertTrue(ok)
         self.assertIn("A001", processed)
         self.assertIn("bill", test_apps[0])
 
-        ok, res = process_appointment("A001", test_apps, patients, doctors, prices, processed)
+        ok, _ = process_appointment("A001", test_apps, patients, doctors, prices, processed)
         self.assertFalse(ok)
 
-        ok, res = process_appointment("A003", test_apps, patients, doctors, prices, processed)
+        ok, _ = process_appointment("A003", test_apps, patients, doctors, prices, processed)
         self.assertFalse(ok)
 
     def test_reprocessing_without_set_blocked_by_saved_bill(self):
         patients, doctors, appointments, prices = get_test_fixtures()
         test_apps = copy.deepcopy(appointments)
 
-        ok1, res1 = process_appointment("A001", test_apps, patients, doctors, prices)
+        ok1, _ = process_appointment("A001", test_apps, patients, doctors, prices)
         self.assertTrue(ok1)
         self.assertEqual(test_apps[0]["bill"]["total"], 5250.0)
 
@@ -391,7 +397,7 @@ class TestHospitalSystem(unittest.TestCase):
         original_tax = CLINIC_CONFIG["tax_rate"]
         try:
             CLINIC_CONFIG["tax_rate"] = 0.10
-            ok, res = process_appointment("A002", test_apps, patients, doctors, prices)
+            ok, _ = process_appointment("A002", test_apps, patients, doctors, prices)
             self.assertTrue(ok)
             dash = generate_clinic_dashboard(patients, doctors, test_apps)
             self.assertEqual(dash["total_tax"], 200.0)
@@ -409,6 +415,8 @@ class TestHospitalSystem(unittest.TestCase):
         doc_rep = generate_doctor_report(doctors, test_apps)
         pat_rep = generate_patient_report(patients, test_apps)
 
+        self.assertEqual(doc_rep["most_requested_doctor"], "Dr. Hassan")
+        self.assertEqual(doc_rep["most_requested_specialization"], "Cardiology")
         for name in ("Ali Khan", "Ahmed Raza", "Sara Ahmed", "Usman Ali"):
             self.assertIn(name, pat_rep["patient_with_most_appointments"])
 
@@ -455,7 +463,7 @@ class TestHospitalSystem(unittest.TestCase):
         self.assertEqual(cost, 0.0)
         self.assertTrue(len(errors) > 0)
 
-        valid, reason = validate_appointment(copy.deepcopy(appointments[0]), patients, doctors, bad_prices)
+        valid, _ = validate_appointment(copy.deepcopy(appointments[0]), patients, doctors, bad_prices)
         self.assertFalse(valid)
 
         empty_doc = generate_doctor_report({}, [])
@@ -489,6 +497,51 @@ class TestHospitalSystem(unittest.TestCase):
         ]
         with self.assertRaises(TypeError):
             generate_clinic_dashboard(bad_patients, {}, corrupt_bill_appts)
+
+    def test_senior_age_threshold_boundary_sixty(self):
+        patients, doctors, _, prices = get_test_fixtures()
+        patients["P060"] = {"name": "Tariq Senior", "age": 60, "city": "Lahore", "insurance": False}
+        patients["P059"] = {"name": "Zahid Middle", "age": 59, "city": "Lahore", "insurance": False}
+
+        test_apps = [
+            {"appointment_id": "A060", "patient_id": "P060", "doctor_id": "D001", "status": "pending", "tests": []},
+            {"appointment_id": "A059", "patient_id": "P059", "doctor_id": "D001", "status": "pending", "tests": []},
+        ]
+
+        ok60, res60 = process_appointment("A060", test_apps, patients, doctors, prices)
+        ok59, res59 = process_appointment("A059", test_apps, patients, doctors, prices)
+
+        self.assertTrue(ok60)
+        self.assertTrue(ok59)
+        self.assertEqual(res60["bill"]["senior_discount"], 500.0)
+        self.assertEqual(res60["bill"]["total"], 4500.0)
+        self.assertEqual(res59["bill"]["senior_discount"], 0.0)
+        self.assertEqual(res59["bill"]["total"], 5000.0)
+
+    def test_test_price_catalog_collision_rejected(self):
+        patients, doctors, appointments, _ = get_test_fixtures()
+        colliding_catalog = {
+            "ECG": 1500,
+            "ecg ": 999,
+        }
+        total, errs = calculate_test_charges(["ECG"], colliding_catalog)
+        self.assertEqual(total, 0.0)
+        self.assertTrue(any("collision" in e.lower() for e in errs))
+
+        valid, msg = validate_appointment(copy.deepcopy(appointments[0]), patients, doctors, colliding_catalog)
+        self.assertFalse(valid)
+        self.assertIn("collision", msg.lower())
+
+    def test_pending_appointment_billed_and_completed(self):
+        patients, doctors, _, prices = get_test_fixtures()
+        pending_apps = [
+            {"appointment_id": "P100", "patient_id": "P001", "doctor_id": "D001", "status": "pending", "tests": []}
+        ]
+        ok, res = process_appointment("P100", pending_apps, patients, doctors, prices)
+        self.assertTrue(ok)
+        self.assertEqual(pending_apps[0]["status"], "completed")
+        self.assertIn("bill", pending_apps[0])
+        self.assertEqual(res["bill"]["total"], 4000.0)
 
 
 if __name__ == "__main__":
