@@ -130,10 +130,17 @@ def calculate_test_charges(test_list, prices=test_prices):
     if not isinstance(prices, dict):
         return 0.0, ["Invalid test price catalog"]
 
+    normalized_prices = {}
+    for k, v in prices.items():
+        if isinstance(k, str):
+            clean_k = k.strip().upper()
+            if clean_k in normalized_prices:
+                return 0.0, [f"Test price catalog collision detected for '{clean_k}'"]
+            normalized_prices[clean_k] = (v, k)
+
     if not test_list:
         return 0.0, []
 
-    normalized_prices = {k.strip().upper(): (v, k) for k, v in prices.items() if isinstance(k, str)}
     seen_tests = set()
     valid_charges = []
     invalid_tests = []
@@ -250,22 +257,19 @@ def validate_appointment(
     if not isinstance(doctors_data, dict):
         return False, "Doctors data must be a valid dictionary"
 
-    normalize_appointment(appointment)
-
     if "appointment_id" in appointment:
-        app_id = appointment.get("appointment_id")
+        app_id = normalize_id(appointment.get("appointment_id"))
         if not isinstance(app_id, str) or not app_id:
             return False, "Invalid appointment_id"
 
-    p_id = appointment.get("patient_id")
-    d_id = appointment.get("doctor_id")
-    status = appointment.get("status")
+    raw_p_id = appointment.get("patient_id")
+    raw_d_id = appointment.get("doctor_id")
+    raw_status = appointment.get("status")
     tests = appointment.get("tests", [])
 
-    p_key, patient = resolve_record(patients_data, p_id)
-    if not isinstance(p_id, str) or not p_id or patient is None:
-        return False, f"Patient {p_id} does not exist"
-    appointment["patient_id"] = p_key
+    p_key, patient = resolve_record(patients_data, raw_p_id)
+    if not isinstance(raw_p_id, str) or not raw_p_id.strip() or patient is None:
+        return False, f"Patient {raw_p_id} does not exist"
 
     if not isinstance(patient, dict):
         return False, f"Patient {p_key} record is corrupt"
@@ -278,10 +282,9 @@ def validate_appointment(
     if not isinstance(insurance, bool):
         return False, f"Patient {p_key} has invalid insurance flag: {insurance}"
 
-    d_key, doctor = resolve_record(doctors_data, d_id)
-    if not isinstance(d_id, str) or not d_id or doctor is None:
-        return False, f"Doctor {d_id} does not exist"
-    appointment["doctor_id"] = d_key
+    d_key, doctor = resolve_record(doctors_data, raw_d_id)
+    if not isinstance(raw_d_id, str) or not raw_d_id.strip() or doctor is None:
+        return False, f"Doctor {raw_d_id} does not exist"
 
     if not isinstance(doctor, dict):
         return False, f"Doctor {d_key} record is corrupt"
@@ -294,9 +297,10 @@ def validate_appointment(
     if available is not True:
         return False, f"Doctor {doctor.get('name', d_key)} is currently unavailable"
 
+    status = normalize_status(raw_status)
     valid_statuses = {"completed", "pending", "cancelled"}
     if status not in valid_statuses:
-        return False, f"Invalid appointment status: {status}"
+        return False, f"Invalid appointment status: {raw_status}"
 
     if not isinstance(tests, (list, tuple, set)):
         return False, "Appointment tests must be a list"
@@ -383,8 +387,10 @@ def process_appointment(
 
     p_id = app["patient_id"]
     d_id = app["doctor_id"]
-    _, patient = resolve_record(patients_data, p_id)
-    _, doctor = resolve_record(doctors_data, d_id)
+    p_key, patient = resolve_record(patients_data, p_id)
+    d_key, doctor = resolve_record(doctors_data, d_id)
+    app["patient_id"] = p_key
+    app["doctor_id"] = d_key
 
     doctor_fee = doctor["fee"]
     test_charges, _ = calculate_test_charges(app.get("tests", []), prices_data)
@@ -714,7 +720,7 @@ if __name__ == "__main__":
         print(f"[DATA ERROR] Duplicate appointment ID(s) found on load: {', '.join(sorted(duplicate_ids))}")
 
     processed_ids = set()
-    for app in list(appointments):
+    for app in appointments:
         app_id = app["appointment_id"]
         success, result = process_appointment(app_id, appointments, patients, doctors, test_prices, processed_ids)
         if success:
